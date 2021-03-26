@@ -1010,10 +1010,10 @@ class CSharpGenerator : public BaseGenerator {
           if (IsStruct(field.value.type) && opts.generate_object_based_api) {
             code += WrapInNameSpace(
                 field.value.type.struct_def->defined_namespace,
-                GenTypeName_ObjectAPI(field.value.type.struct_def->name, opts));
+                GenTypeName_ObjectAPI(*field.value.type.struct_def, opts));
             code += " ";
             code += field.name;
-            code += " = null";
+            code += " = default";
           } else {
             code += GenTypeBasic(field.value.type);
             if (field.IsScalarOptional()) { code += "?"; }
@@ -1856,6 +1856,7 @@ class CSharpGenerator : public BaseGenerator {
       const StructDef &struct_def, std::string *code_ptr,
       std::vector<FieldArrayLength> &array_lengths) const {
     auto &code = *code_ptr;
+    std::string ind = struct_def.attributes.Lookup("objapi_partial_class") ? "  " : "";
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
       auto &field = **it;
@@ -1888,7 +1889,7 @@ class CSharpGenerator : public BaseGenerator {
             if (i != 0) { code += ","; }
             code += NumToString(array_only_lengths[i].length);
           }
-          code += "];\n";
+          code += "];\n" + ind;
           code += "    ";
           // initialize array
           for (size_t i = 0; i < array_only_lengths.size(); ++i) {
@@ -1922,7 +1923,7 @@ class CSharpGenerator : public BaseGenerator {
           }
           code += ";";
         }
-        code += "\n";
+        code += "\n" + ind;
       }
       array_lengths.pop_back();
     }
@@ -1933,6 +1934,7 @@ class CSharpGenerator : public BaseGenerator {
                                   std::string prefix1, 
                                   std::string prefix2) const {
     auto &code = *code_ptr;
+    std::string ind = struct_def.attributes.Lookup("objapi_partial_class") ? "  " : "";
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
       auto &field = **it;
@@ -1941,7 +1943,7 @@ class CSharpGenerator : public BaseGenerator {
         GenStructPackCall_ObjectAPI(*field_type.struct_def, code_ptr,
                                    prefix1, prefix2 + field.name + "_");
       } else {
-        code += ",\n";
+        code += ",\n" + ind;
         code += prefix1 + WrapInPackFn(prefix2 + field.name, field.attributes);
       }
     }

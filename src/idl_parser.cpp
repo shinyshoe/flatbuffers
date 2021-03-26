@@ -82,15 +82,15 @@ static bool ValidateUTF8(const std::string &str) {
   return true;
 }
 
-static bool IsLowerSnakeCase(const std::string &str) {
-  for (size_t i = 0; i < str.length(); i++) {
-    char c = str[i];
-    if (!check_ascii_range(c, 'a', 'z') && !is_digit(c) && c != '_') {
-      return false;
-    }
-  }
-  return true;
-}
+//static bool IsLowerSnakeCase(const std::string &str) {
+//  for (size_t i = 0; i < str.length(); i++) {
+//    char c = str[i];
+//    if (!check_ascii_range(c, 'a', 'z') && !is_digit(c) && c != '_') {
+//      return false;
+//    }
+//  }
+//  return true;
+//}
 
 // Convert an underscore_based_identifier in to camelCase.
 // Also uppercases the first character if first is true.
@@ -742,9 +742,9 @@ CheckedError Parser::ParseField(StructDef &struct_def) {
   if (LookupCreateStruct(name, false, false))
     return Error("field name can not be the same as table/struct name");
 
-  if (!IsLowerSnakeCase(name)) {
-    Warning("field names should be lowercase snake_case, got: " + name);
-  }
+  //if (!IsLowerSnakeCase(name)) {
+  //  Warning("field names should be lowercase snake_case, got: " + name);
+  //}
 
   std::vector<std::string> dc = doc_comment_;
   EXPECT(kTokenIdentifier);
