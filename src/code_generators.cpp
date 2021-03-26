@@ -128,7 +128,7 @@ std::string BaseGenerator::WrapInNameSpace(const Namespace *ns,
 }
 
 std::string BaseGenerator::WrapInNameSpace(const Definition &def) const {
-  return WrapInNameSpace(def.defined_namespace, def.name);
+  return WrapInNameSpace(def.defined_namespace, def.GetNameQualifiedByOuterClass());
 }
 
 std::string BaseGenerator::GetNameSpace(const Definition &def) const {
@@ -155,7 +155,7 @@ std::string BaseGenerator::GeneratedFileName(const std::string &path,
 
 // Generate a documentation comment, if available.
 void GenComment(const std::vector<std::string> &dc, std::string *code_ptr,
-                const CommentConfig *config, const char *prefix) {
+                const CommentConfig *config, const char *prefix, const char *indent) {
   if (dc.begin() == dc.end()) {
     // Don't output empty comment blocks with 0 lines of comment content.
     return;
@@ -163,7 +163,7 @@ void GenComment(const std::vector<std::string> &dc, std::string *code_ptr,
 
   std::string &code = *code_ptr;
   if (config != nullptr && config->first_line != nullptr) {
-    code += std::string(prefix) + std::string(config->first_line) + "\n";
+    code += std::string(prefix) + std::string(config->first_line) + "\n" + indent;
   }
   std::string line_prefix =
       std::string(prefix) +
@@ -171,10 +171,10 @@ void GenComment(const std::vector<std::string> &dc, std::string *code_ptr,
            ? config->content_line_prefix
            : "///");
   for (auto it = dc.begin(); it != dc.end(); ++it) {
-    code += line_prefix + *it + "\n";
+    code += line_prefix + *it + "\n" + indent;
   }
   if (config != nullptr && config->last_line != nullptr) {
-    code += std::string(prefix) + std::string(config->last_line) + "\n";
+    code += std::string(prefix) + std::string(config->last_line) + "\n" + indent;
   }
 }
 

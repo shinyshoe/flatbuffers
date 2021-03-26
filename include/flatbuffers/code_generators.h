@@ -154,7 +154,7 @@ struct CommentConfig {
 
 extern void GenComment(const std::vector<std::string> &dc,
                        std::string *code_ptr, const CommentConfig *config,
-                       const char *prefix = "");
+                       const char *prefix = "", const char *indent = "");
 
 class FloatConstantGenerator {
  public:
