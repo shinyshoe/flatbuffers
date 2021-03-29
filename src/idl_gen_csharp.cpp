@@ -147,7 +147,8 @@ class CSharpGenerator : public BaseGenerator {
     return GenTypeBasic(type, true);
   }
 
-  std::string GenTypePointer(const Type &type) const {
+  std::string GenTypePointer(const Type &type, Type *typeOut = nullptr) const {
+    if (typeOut != nullptr) *typeOut = type;
     switch (type.base_type) {
       case BASE_TYPE_STRING: return "string";
       case BASE_TYPE_VECTOR: return GenTypeGet(type.VectorType());
@@ -157,11 +158,21 @@ class CSharpGenerator : public BaseGenerator {
     }
   }
 
-  std::string GenTypeGet(const Type &type) const {
+  std::string GenTypeGet(const Type &type, Type *typeOut = nullptr) const {
+    if (typeOut != nullptr) *typeOut = type;
     return IsScalar(type.base_type)
                ? GenTypeBasic(type)
-               : (IsArray(type) ? GenTypeGet(type.VectorType())
-                                : GenTypePointer(type));
+               : (IsArray(type) ? GenTypeGet(type.VectorType(), typeOut)
+                                : GenTypePointer(type, typeOut));
+  }
+
+  std::string GenTypeGetObjApiName(const Type &type, const IDLOptions &opts) const {
+    Type typeFound;
+    std::string fbTypeName = GenTypeGet(type, &typeFound);
+    if (type.struct_def != nullptr) {
+      return WrapInNameSpace(type.struct_def->defined_namespace, GenTypeName_ObjectAPI(*type.struct_def, opts));
+    }
+    return fbTypeName;
   }
 
   std::string GenOffsetType(const StructDef &struct_def) const {
@@ -419,17 +430,18 @@ class CSharpGenerator : public BaseGenerator {
                      const char *nameprefix, size_t index = 0,
                      bool in_array = false) const {
     std::string &code = *code_ptr;
+    std::string ind = struct_def.attributes.Lookup("objapi_partial_class") ? "  " : "";
     std::string indent((index + 1) * 2, ' ');
     code += indent + "  builder.Prep(";
     code += NumToString(struct_def.minalign) + ", ";
-    code += NumToString(struct_def.bytesize) + ");\n";
+    code += NumToString(struct_def.bytesize) + ");\n" + ind;
     for (auto it = struct_def.fields.vec.rbegin();
          it != struct_def.fields.vec.rend(); ++it) {
       auto &field = **it;
       const auto &field_type = field.value.type;
       if (field.padding) {
         code += indent + "  builder.Pad(";
-        code += NumToString(field.padding) + ");\n";
+        code += NumToString(field.padding) + ");\n" + ind;
       }
       if (IsStruct(field_type)) {
         GenStructBody(*field_type.struct_def, code_ptr,
@@ -442,7 +454,7 @@ class CSharpGenerator : public BaseGenerator {
         if (IsArray(field_type)) {
           code += indent + "  for (int " + index_var + " = ";
           code += NumToString(field_type.fixed_length);
-          code += "; " + index_var + " > 0; " + index_var + "--) {\n";
+          code += "; " + index_var + " > 0; " + index_var + "--) {\n" + ind;
           in_array = true;
         }
         if (IsStruct(type)) {
@@ -465,9 +477,9 @@ class CSharpGenerator : public BaseGenerator {
             }
             code += "]";
           }
-          code += ");\n";
+          code += ");\n" + ind;
         }
-        if (IsArray(field_type)) { code += indent + "  }\n"; }
+        if (IsArray(field_type)) { code += indent + "  }\n" + ind; }
       }
     }
   }
@@ -782,7 +794,7 @@ class CSharpGenerator : public BaseGenerator {
               auto val = *uit;
               if (val->union_type.base_type == BASE_TYPE_NONE) { continue; }
               auto union_field_type_name = GenTypeGet(val->union_type);
-              code += member_suffix + "}\n";
+              code += member_suffix + "}\n" + ind;
               if (val->union_type.base_type == BASE_TYPE_STRUCT &&
                   val->union_type.struct_def->attributes.Lookup("private")) {
                 code += "  internal ";
@@ -1549,27 +1561,52 @@ class CSharpGenerator : public BaseGenerator {
         }
         case BASE_TYPE_VECTOR:
           if (field.value.type.element == BASE_TYPE_UNION) {
-            code += start + "new " +
-                    GenTypeGet_ObjectAPI(field.value.type, opts) + "();\n" + ind;
-            code += "    for (var _j = 0; _j < this." + camel_name +
-                    "Length; ++_j) {\n" + ind;
-            GenUnionUnPack_ObjectAPI(*field.value.type.enum_def, code_ptr,
-                                     apiObjName, camel_name, true);
+            code += start + "new " + GetObjAPIConvertType(GenTypeGet_ObjectAPI(field.value.type, opts), field.attributes) + "();\n" + ind;                    
+            code += "    for (var _j = 0; _j < this." + camel_name + "Length; ++_j) {\n" + ind;
+            GenUnionUnPack_ObjectAPI(*field.value.type.enum_def, code_ptr, apiObjName, camel_name, true);
             code += "    }\n" + ind;
           } else if (field.value.type.element != BASE_TYPE_UTYPE) {
-            auto fixed = field.value.type.struct_def == nullptr;
-            code += start + "new " +
-                    GenTypeGet_ObjectAPI(field.value.type, opts) + "();\n" + ind;
-            code += "    for (var _j = 0; _j < this." + camel_name +
-                    "Length; ++_j) {";
-            code += "_o." + apiObjName + ".Add(";
-            if (fixed) {
-              code += WrapInUnPackFn("this." + camel_name + "(_j)", field.attributes);
+            // Special case of representing a Dictionary as a flat buffer array
+            if (field.attributes.Lookup("objapi_dict")) {
+              // The factors that change the emitted code
+              auto fixed = field.value.type.struct_def == nullptr;
+              std::map<std::string, std::string> replace;
+              replace["_objFieldDict"] = apiObjName;
+              replace["_fbFieldList"] = camel_name;
+              // The code to emit
+              const std::array<std::string, 8> dictLines = { 
+                "    // Special case of representing a Dictionary as a flat buffer array (objapi_dict attribute)", // 0
+                "    _o._objFieldDict.Clear();",                                  // 1
+                "    for (var _j = 0; _j < this._fbFieldListLength; ++_j) {",     // 2
+                "      if (this._fbFieldList(_j).HasValue) {",                    // 3
+                "        var kvp = this._fbFieldList(_j).Value.UnPack();",        // 4
+                "        _o._objFieldDict.Add(kvp.Key, kvp.Value);",              // 5
+                "      }",                                                        // 6
+                "    }",                                                          // 7
+              };
+              const std::string altLines[] = { 
+                "      if (true) {",                                              // 0 - if fixed, replaces line 3
+              };
+              // Emit the code
+              for (int i = 0; i < dictLines.size(); i++) {
+                std::string line = dictLines[i];
+                // Replace line with alternate
+                if (fixed && i == 3) line = altLines[0]; // if fixed, replace line 3 with alt line 0
+                // Emit line
+                code += EmitLine(line, replace, ind);
+              }
             } else {
-              code += "this." + camel_name + "(_j).HasValue ? " + WrapInUnPackFn("this." +
-                      camel_name + "(_j).Value.UnPack()", field.attributes) + " : default";
+              auto fixed = field.value.type.struct_def == nullptr;
+              code += start + "new " + GetObjAPIConvertType(GenTypeGet_ObjectAPI(field.value.type, opts), field.attributes) + "();\n" + ind;
+              code += "    for (var _j = 0; _j < this." + camel_name + "Length; ++_j) {";
+              code += "_o." + apiObjName + ".Add(";
+              if (fixed) {
+                code += WrapInUnPackFn("this." + camel_name + "(_j)", field.attributes);
+              } else {
+                code += "this." + camel_name + "(_j).HasValue ? " + WrapInUnPackFn("this." + camel_name + "(_j).Value.UnPack()", field.attributes) + " : default";
+              }
+              code += ");}\n" + ind;
             }
-            code += ");}\n" + ind;
           }
           break;
         case BASE_TYPE_UTYPE: break;
@@ -1607,7 +1644,7 @@ class CSharpGenerator : public BaseGenerator {
                     " == null ? default(" +
                     GenOffsetType(*field.value.type.struct_def) +
                     ") : " + GenTypeGet(field.value.type) +
-                    ".Pack(builder, _o." + apiObjName + ");\n" + ind;
+                    ".Pack(builder, " + WrapInPackFn("_o." + apiObjName, field.attributes) + ");\n" + ind;
           } else if (struct_def.fixed && struct_has_create) {
             std::vector<FieldArrayLength> array_lengths;
             FieldArrayLength tmp_array_length = {
@@ -1626,7 +1663,7 @@ class CSharpGenerator : public BaseGenerator {
           code += "    var _" + field.name + " = _o." + apiObjName +
                   " == null ? default(StringOffset) : "
                   "builder." +
-                  create_string + "(_o." + apiObjName + ");\n" + ind;
+                  create_string + "(" + WrapInPackFn("_o." + apiObjName, field.attributes) + ");\n" + ind;
           break;
         }
         case BASE_TYPE_VECTOR: {
@@ -1642,14 +1679,14 @@ class CSharpGenerator : public BaseGenerator {
                 std::string create_string =
                     field.shared ? "CreateSharedString" : "CreateString";
                 array_type = "StringOffset";
-                to_array += "builder." + create_string + "(_o." +
-                            apiObjPropName + "[_j])";
+                to_array += "builder." + create_string + "(" + WrapInPackFn("_o." +
+                            apiObjPropName + "[_j]", field.attributes) + ")";
                 break;
               }
               case BASE_TYPE_STRUCT:
                 array_type = "Offset<" + GenTypeGet(field.value.type) + ">";
-                to_array = GenTypeGet(field.value.type) + ".Pack(builder, _o." +
-                           apiObjPropName + "[_j])";
+                to_array = GenTypeGet(field.value.type) + ".Pack(builder, " + WrapInPackFn("_o." +
+                           apiObjPropName + "[_j]", field.attributes) + ")";
                 break;
               case BASE_TYPE_UTYPE:
                 property_name = camel_name.substr(0, camel_name.size() - 4);
@@ -1660,7 +1697,7 @@ class CSharpGenerator : public BaseGenerator {
               case BASE_TYPE_UNION:
                 array_type = "int";
                 to_array = WrapInNameSpace(*field.value.type.enum_def) +
-                           "Union.Pack(builder,  _o." + apiObjPropName + "[_j])";
+                           "Union.Pack(builder,  " + WrapInPackFn("_o." + apiObjPropName + "[_j]", field.attributes) + ")";
                 break;
               default: gen_for_loop = false; break;
             }
@@ -1669,9 +1706,37 @@ class CSharpGenerator : public BaseGenerator {
             if (gen_for_loop) {
               code += "      var " + array_name + " = new " + array_type +
                       "[_o." + apiObjPropName + ".Count];\n" + ind;
-              code += "      for (var _j = 0; _j < " + array_name +
-                      ".Length; ++_j) { ";
-              code += array_name + "[_j] = " + to_array + "; }\n" + ind;
+              // Special case of representing a Dictionary as a flat buffer array
+              if (field.attributes.Lookup("objapi_dict")) {
+                // The factors that change the emitted code
+                std::map<std::string, std::string> replace;
+                replace["FbKvpType"] = GenTypeGet(field.value.type);
+                replace["ObjApiKvpType"] = GenTypeGetObjApiName(field.value.type, opts);
+                replace["___arrayNameOrig"] = array_name;
+                replace["___arrayNameKvp"] = array_name + "Kvp";
+                replace["___arrayNameDictIter"] = array_name + "DictIter";
+                replace["_objFieldDict"] = apiObjPropName;
+                // The code to emit
+                const std::array<std::string, 9> dictLines = { 
+                  "      // Special case of representing a Dictionary as a flat buffer array (objapi_dict attribute)",
+                  "      var ___arrayNameKvp = new ObjApiKvpType();",
+                  "      var ___arrayNameDictIter = _o._objFieldDict.GetEnumerator();",
+                  "      for (var _j = 0; _j < ___arrayNameOrig.Length; ++_j) {",
+                  "        ___arrayNameDictIter.MoveNext();",
+                  "        ___arrayNameKvp.Key = ___arrayNameDictIter.Current.Key;",
+                  "        ___arrayNameKvp.Value = ___arrayNameDictIter.Current.Value;",
+                  "        ___arrayNameOrig[_j] = FbKvpType.Pack(builder, ___arrayNameKvp);",
+                  "      }",
+                  };
+                  // Emit the code
+                  for (const auto& line : dictLines) {
+                    code += EmitLine(line, replace, ind);
+                  }
+              } else {
+                code += "      for (var _j = 0; _j < " + array_name +
+                        ".Length; ++_j) { ";
+                code += array_name + "[_j] = " + to_array + "; }\n" + ind;
+              }
             } else {
               code += "      var " + array_name + " = _o." + apiObjPropName +
                       ".ToArray();\n" + ind;
@@ -1750,7 +1815,7 @@ class CSharpGenerator : public BaseGenerator {
                   code += "      " + GenTypeGet(field.value.type) +
                           ".Pack(builder, _o." + camel_name + ")";
               } else {
-                code += "      " + WrapInPackFn("_" + field.name, field.attributes);
+                code += "      _" + field.name;
               }
             }
             break;
@@ -1761,7 +1826,7 @@ class CSharpGenerator : public BaseGenerator {
                                          "      ", "_" + field.name + "_");
             } else {
               code += ",\n" + ind;
-              code += "      " + WrapInPackFn("_" + field.name, field.attributes);
+              code += "      _" + field.name;
             }
             break;
           }
@@ -1770,7 +1835,7 @@ class CSharpGenerator : public BaseGenerator {
           case BASE_TYPE_STRING: FLATBUFFERS_FALLTHROUGH();  // fall thru
           case BASE_TYPE_VECTOR: {
             code += ",\n" + ind;
-            code += "      " + WrapInPackFn("_" + field.name, field.attributes);
+            code += "      _" + field.name;
             break;
           }
           default:  // scalar
@@ -1797,7 +1862,7 @@ class CSharpGenerator : public BaseGenerator {
                       + "));\n" + ind;
             } else {
               code +=
-                  "    Add" + camel_name + "(builder, " + WrapInPackFn("_" + field.name, field.attributes) + ");\n" + ind;
+                  "    Add" + camel_name + "(builder, _" + field.name + ");\n" + ind;
             }
             break;
           }
@@ -1805,14 +1870,14 @@ class CSharpGenerator : public BaseGenerator {
           case BASE_TYPE_ARRAY: FLATBUFFERS_FALLTHROUGH();   // fall thru
           case BASE_TYPE_VECTOR: {
             code +=
-                "    Add" + camel_name + "(builder, " + WrapInPackFn("_" + field.name, field.attributes) + ");\n" + ind;
+                "    Add" + camel_name + "(builder, " + "_" + field.name + ");\n" + ind;
             break;
           }
           case BASE_TYPE_UTYPE: break;
           case BASE_TYPE_UNION: {
-            code += "    Add" + camel_name + "Type(builder, " + WrapInPackFn("_" + field.name + "_type", field.attributes) + ");\n" + ind;
+            code += "    Add" + camel_name + "Type(builder, _" + field.name + "_type" + ");\n" + ind;
             code +=
-                "    Add" + camel_name + "(builder, " + WrapInPackFn("_" + field.name, field.attributes) + ");\n" + ind;
+                "    Add" + camel_name + "(builder, _" + field.name + ");\n" + ind;
             break;
           }
           // scalar
@@ -1850,6 +1915,13 @@ class CSharpGenerator : public BaseGenerator {
       return packFnName + "(" + expr + ")";
     }
     return expr;
+  }
+
+  std::string GetObjAPIConvertType(const std::string &normalType, const SymbolTable<Value> &fieldAttributes) const {    
+    if (fieldAttributes.Lookup("objapi_convert_type")) {
+      return fieldAttributes.Lookup("objapi_convert_type")->constant;
+    }
+    return normalType;
   }
 
   void GenStructPackDecl_ObjectAPI(
@@ -2142,6 +2214,43 @@ class CSharpGenerator : public BaseGenerator {
     if (!struct_def.attributes.Lookup("objapi_partial_class")) {
       code += "}\n\n";
     }
+  }
+
+  std::string EmitLine(const std::string &line, const std::map<std::string, std::string> &replacementMap, 
+                       const std::string &extraIndent) const {
+    // Collect the replacements
+    struct ReplacePos {
+      std::string searchFor;
+      std::string replaceWith;
+      size_t pos = 0;
+    };
+    std::vector<ReplacePos> replacements;
+    for (const auto &kvp : replacementMap) {
+      size_t pos = 0;
+      while (true) {
+        pos = line.find(kvp.first, pos);
+        if (pos == std::string::npos) break;
+        ReplacePos replaceEntry;
+        replaceEntry.searchFor = kvp.first;
+        replaceEntry.replaceWith = kvp.second;
+        replaceEntry.pos = pos;
+        replacements.push_back(replaceEntry);
+        pos += kvp.first.size();
+      }
+    }
+    // Sort the replacements
+    std::sort(replacements.begin(), replacements.end(), [](const ReplacePos &lhs, const ReplacePos &rhs) {
+      return lhs.pos < rhs.pos;
+    });
+    // Apply the replacements
+    std::string lineOut = line;
+    size_t posAdjust = 0;
+    for (const auto& replace : replacements) {
+      lineOut.replace(replace.pos + posAdjust, replace.searchFor.size(), replace.replaceWith);
+      posAdjust += replace.replaceWith.size() - replace.searchFor.size();
+    }
+    // Add the newline
+    return lineOut + "\n" + extraIndent;
   }
 
   // This tracks the current namespace used to determine if a type need to be
