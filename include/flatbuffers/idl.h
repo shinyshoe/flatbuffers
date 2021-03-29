@@ -275,12 +275,17 @@ struct Definition {
   bool DeserializeAttributes(Parser &parser,
                              const Vector<Offset<reflection::KeyValue>> *attrs);
 
+  std::string GetNameQualifiedByOuterClass() const {
+    return outerClassName.empty() ? name : outerClassName + "." + name;
+  }
+
   std::string name;
   std::string file;
   std::vector<std::string> doc_comment;
   SymbolTable<Value> attributes;
   bool generated;  // did we already output code for this definition?
   Namespace *defined_namespace;  // Where it was defined.
+  std::string outerClassName; // Used by objapi_partial_class.  Add this to the namespace, since the struct is an inner class.
 
   // For use with Serialize()
   uoffset_t serialized_location;
@@ -813,6 +818,12 @@ class Parser : public ParserState {
     known_attributes_["native_default"] = true;
     known_attributes_["flexbuffer"] = true;
     known_attributes_["private"] = true;
+    known_attributes_["objapi_partial_class"] = true; // Table/struct attribute.  If --gen-object-api is specified, generate the object api class as an outer partial class
+    known_attributes_["objapi_field_name"] = true; // Field attribute.  For a table/struct marked objapi_partial_class, use this as the object api field name instead of the fb field name
+    known_attributes_["objapi_convert_to_fbtype"] = true; // Field attribute.  For a table/struct marked objapi_partial_class, call this on the field before packing it to convert it into the fb field type
+    known_attributes_["objapi_convert_from_fbtype"] = true; // Field attribute.  For a table/struct marked objapi_partial_class, call this on the field after unpacking it to convert it from the fb field type
+    known_attributes_["objapi_convert_type"] = true; // Field attribute.  For a field marked with objapi_convert_from_fbtype, the class converted to.  Needed in some cases, such as list initialization.
+    known_attributes_["objapi_dict"] = true; // Field attribute.  For a table/struct marked objapi_partial_class, this field is a list of kvp values that represent a dictionary.  Convert to/from dictionary.
   }
 
   ~Parser() {
@@ -984,6 +995,8 @@ class Parser : public ParserState {
 
   FLATBUFFERS_CHECKED_ERROR RecurseError();
   template<typename F> CheckedError Recurse(F f);
+
+  std::string GetOuterClassName(const std::string &structName) const;
 
  public:
   SymbolTable<Type> types_;
@@ -1190,6 +1203,8 @@ extern bool GenerateSwiftGRPC(const Parser &parser, const std::string &path,
 
 extern bool GenerateTSGRPC(const Parser &parser, const std::string &path,
                            const std::string &file_name);
+
+extern std::string PartialClass_GetObjectAPIClassName(const std::string &structName);
 }  // namespace flatbuffers
 
 #endif  // FLATBUFFERS_IDL_H_

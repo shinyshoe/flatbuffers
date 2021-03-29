@@ -82,15 +82,15 @@ static bool ValidateUTF8(const std::string &str) {
   return true;
 }
 
-static bool IsLowerSnakeCase(const std::string &str) {
-  for (size_t i = 0; i < str.length(); i++) {
-    char c = str[i];
-    if (!check_ascii_range(c, 'a', 'z') && !is_digit(c) && c != '_') {
-      return false;
-    }
-  }
-  return true;
-}
+//static bool IsLowerSnakeCase(const std::string &str) {
+//  for (size_t i = 0; i < str.length(); i++) {
+//    char c = str[i];
+//    if (!check_ascii_range(c, 'a', 'z') && !is_digit(c) && c != '_') {
+//      return false;
+//    }
+//  }
+//  return true;
+//}
 
 // Convert an underscore_based_identifier in to camelCase.
 // Also uppercases the first character if first is true.
@@ -742,9 +742,9 @@ CheckedError Parser::ParseField(StructDef &struct_def) {
   if (LookupCreateStruct(name, false, false))
     return Error("field name can not be the same as table/struct name");
 
-  if (!IsLowerSnakeCase(name)) {
-    Warning("field names should be lowercase snake_case, got: " + name);
-  }
+  //if (!IsLowerSnakeCase(name)) {
+  //  Warning("field names should be lowercase snake_case, got: " + name);
+  //}
 
   std::vector<std::string> dc = doc_comment_;
   EXPECT(kTokenIdentifier);
@@ -2074,6 +2074,22 @@ StructDef *Parser::LookupCreateStruct(const std::string &name,
   return struct_def;
 }
 
+const std::string g_partialClassExpectedPrefix = "Fb";
+
+bool PartialClass_IsExpectedClassName(const std::string &structName) {   
+  return structName.compare(0, g_partialClassExpectedPrefix.size(), g_partialClassExpectedPrefix) == 0;
+}
+
+std::string PartialClass_GetObjectAPIClassName(const std::string &structName) {    
+  // We expect to have defined the class name in the fbs file as starting
+  //   with "Fb".  We want to return a class name with the "Fb" stripped
+  //    off.  Example: FbWorldUnitState -> WorldUnitState
+  if (PartialClass_IsExpectedClassName(structName)) {
+    return structName.substr(g_partialClassExpectedPrefix.size());
+  }
+  return structName;
+}
+
 const EnumVal *EnumDef::MinValue() const {
   return vals.vec.empty() ? nullptr : vals.vec.front();
 }
@@ -2506,6 +2522,15 @@ CheckedError Parser::ParseDecl() {
   struct_def->doc_comment = dc;
   struct_def->fixed = fixed;
   ECHECK(ParseMetaData(&struct_def->attributes));
+
+  // If the table/struct has the objapi_partial_class attribute, set its outerClassName to be the generated object api class name
+  if (struct_def->attributes.Lookup("objapi_partial_class")) {
+    if (!PartialClass_IsExpectedClassName(struct_def->name)) {
+        return Error(struct_def->name + " has the objapi_partial_class attribute, so its name must start with \"" + g_partialClassExpectedPrefix + "\"");
+    }
+    struct_def->outerClassName = PartialClass_GetObjectAPIClassName(struct_def->name);
+  }
+
   struct_def->sortbysize =
       struct_def->attributes.Lookup("original_order") == nullptr && !fixed;
   EXPECT('{');
