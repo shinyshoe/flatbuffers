@@ -824,6 +824,9 @@ class Parser : public ParserState {
     known_attributes_["objapi_convert_from_fbtype"] = true; // Field attribute.  For a table/struct marked objapi_partial_class, call this on the field after unpacking it to convert it from the fb field type
     known_attributes_["objapi_convert_type"] = true; // Field attribute.  For a field marked with objapi_convert_from_fbtype, the class converted to.  Needed in some cases, such as list initialization.
     known_attributes_["objapi_dict"] = true; // Field attribute.  For a table/struct marked objapi_partial_class, this field is a list of kvp values that represent a dictionary.  Convert to/from dictionary.
+    known_attributes_["objapi_convert_to_fbtype_with_context"] = true; // Field attribute.  Same as objapi_convert_to_fbtype except it passes in an IFlatBufferContext to the conversion function
+    known_attributes_["objapi_replace_obj"] = true; // Table/struct attribute.  Assumes object implements IFlatBufferReplaceObject.  Calls FbReplaceObj(obj, context) on object to allow it to replace itself.
+    known_attributes_["objapi_push_as_context"] = true; // Table/struct attribute.  Pushes/Pops itself to the IFlatBufferContext so that sub-objects can refer to it.
   }
 
   ~Parser() {

@@ -981,7 +981,7 @@ class CSharpGenerator : public BaseGenerator {
       // create a struct constructor function
       code += "  public static " + GenOffsetType(struct_def) + " ";
       code += "Create";
-      code += struct_def.name + "(FlatBufferBuilder builder";
+      code += struct_def.name + "(FlatBufferBuilder builder, ShinyShoe.Ares.IFlatBufferContext context";
       GenStructArgs(struct_def, code_ptr, "");
       code += ") {\n" + ind;
       GenStructBody(struct_def, code_ptr, "");
@@ -1013,7 +1013,7 @@ class CSharpGenerator : public BaseGenerator {
         // public static int createName(FlatBufferBuilder builder, args...)
         code += "  public static " + GenOffsetType(struct_def) + " ";
         code += "Create" + struct_def.name;
-        code += "(FlatBufferBuilder builder";
+        code += "(FlatBufferBuilder builder, ShinyShoe.Ares.IFlatBufferContext context";
         for (auto it = struct_def.fields.vec.begin();
              it != struct_def.fields.vec.end(); ++it) {
           auto &field = **it;
@@ -1054,7 +1054,7 @@ class CSharpGenerator : public BaseGenerator {
               if (IsStruct(field.value.type) &&
                   opts.generate_object_based_api) {
                 code += GenTypePointer(field.value.type) + ".Pack(builder, " +
-                        field.name + ")";
+                        field.name + ", context)";
               } else {
                 code += field.name;
                 if (!IsScalar(field.value.type.base_type)) code += "Offset";
@@ -1116,7 +1116,7 @@ class CSharpGenerator : public BaseGenerator {
             code += "  public static VectorOffset ";
             code += "Create";
             code += MakeCamel(field.name);
-            code += "Vector(FlatBufferBuilder builder, ";
+            code += "Vector(FlatBufferBuilder builder, ShinyShoe.Ares.IFlatBufferContext context, ";
             code += GenTypeBasic(vector_type) + "[] data) ";
             code += "{ builder.StartVector(";
             code += NumToString(elem_size);
@@ -1138,7 +1138,7 @@ class CSharpGenerator : public BaseGenerator {
             code += "  public static VectorOffset ";
             code += "Create";
             code += MakeCamel(field.name);
-            code += "VectorBlock(FlatBufferBuilder builder, ";
+            code += "VectorBlock(FlatBufferBuilder builder, ShinyShoe.Ares.IFlatBufferContext context, ";
             code += GenTypeBasic(vector_type) + "[] data) ";
             code += "{ builder.StartVector(";
             code += NumToString(elem_size);
@@ -1194,7 +1194,7 @@ class CSharpGenerator : public BaseGenerator {
       FLATBUFFERS_ASSERT(key_field);
       code += "\n"+ind+"  public static VectorOffset ";
       code += "CreateSortedVectorOf" + struct_def.name;
-      code += "(FlatBufferBuilder builder, ";
+      code += "(FlatBufferBuilder builder, ShinyShoe.Ares.IFlatBufferContext context, ";
       code += "Offset<" + struct_def.name + ">";
       code += "[] offsets) {\n" + ind;
       code += "    Array.Sort(offsets, (Offset<" + struct_def.name +
@@ -1348,7 +1348,7 @@ class CSharpGenerator : public BaseGenerator {
     code += "\n";
     // Pack()
     code += "  public static int Pack(FlatBuffers.FlatBufferBuilder builder, " +
-            union_name + " _o) {\n";
+            union_name + " _o, ShinyShoe.Ares.IFlatBufferContext context) {\n";
     code += "    switch (_o.Type) {\n";
     for (auto it = enum_def.Vals().begin(); it != enum_def.Vals().end(); ++it) {
       auto &ev = **it;
@@ -1360,7 +1360,7 @@ class CSharpGenerator : public BaseGenerator {
           code += "builder.CreateString(_o.As" + ev.name + "()).Value;\n";
         } else {
           code += GenTypeGet(ev.union_type) + ".Pack(builder, _o.As" + ev.name +
-                  "()).Value;\n";
+                  "(), context).Value;\n";
         }
       }
     }
@@ -1625,10 +1625,19 @@ class CSharpGenerator : public BaseGenerator {
     code += "  }\n" + ind;
     // Pack()
     code += "  public static " + GenOffsetType(struct_def) +
-            " Pack(FlatBufferBuilder builder, " + struct_name + " _o) {\n" + ind;
+            " Pack(FlatBufferBuilder builder, " + struct_name + " _o, ShinyShoe.Ares.IFlatBufferContext context) {\n" + ind;
     if (!struct_def.fixed) {
       code += "    if (_o == null) return default(" +
               GenOffsetType(struct_def) + ");\n" + ind;
+    }
+    if (struct_def.attributes.Lookup("objapi_replace_obj")) {
+      code += "    _o = _o.FbReplaceObject(context);\n" + ind;
+    }
+    bool isPushAsContext = struct_def.attributes.Lookup("objapi_push_as_context") != nullptr;
+    if (isPushAsContext) {
+      ind += "  ";
+      code += "    try {\n" + ind;
+      code += "    context?.Push(_o);\n" + ind;
     }
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
@@ -1644,7 +1653,7 @@ class CSharpGenerator : public BaseGenerator {
                     " == null ? default(" +
                     GenOffsetType(*field.value.type.struct_def) +
                     ") : " + GenTypeGet(field.value.type) +
-                    ".Pack(builder, " + WrapInPackFn("_o." + apiObjName, field.attributes) + ");\n" + ind;
+                    ".Pack(builder, " + WrapInPackFn("_o." + apiObjName, field.attributes) + ", context);\n" + ind;
           } else if (struct_def.fixed && struct_has_create) {
             std::vector<FieldArrayLength> array_lengths;
             FieldArrayLength tmp_array_length = {
@@ -1686,7 +1695,7 @@ class CSharpGenerator : public BaseGenerator {
               case BASE_TYPE_STRUCT:
                 array_type = "Offset<" + GenTypeGet(field.value.type) + ">";
                 to_array = GenTypeGet(field.value.type) + ".Pack(builder, " + WrapInPackFn("_o." +
-                           apiObjPropName + "[_j]", field.attributes) + ")";
+                           apiObjPropName + "[_j]", field.attributes) + ", context)";
                 break;
               case BASE_TYPE_UTYPE:
                 property_name = camel_name.substr(0, camel_name.size() - 4);
@@ -1697,7 +1706,7 @@ class CSharpGenerator : public BaseGenerator {
               case BASE_TYPE_UNION:
                 array_type = "int";
                 to_array = WrapInNameSpace(*field.value.type.enum_def) +
-                           "Union.Pack(builder,  " + WrapInPackFn("_o." + apiObjPropName + "[_j]", field.attributes) + ")";
+                           "Union.Pack(builder,  " + WrapInPackFn("_o." + apiObjPropName + "[_j]", field.attributes) + ", context)";
                 break;
               default: gen_for_loop = false; break;
             }
@@ -1725,7 +1734,7 @@ class CSharpGenerator : public BaseGenerator {
                   "        ___arrayNameDictIter.MoveNext();",
                   "        ___arrayNameKvp.Key = ___arrayNameDictIter.Current.Key;",
                   "        ___arrayNameKvp.Value = ___arrayNameDictIter.Current.Value;",
-                  "        ___arrayNameOrig[_j] = FbKvpType.Pack(builder, ___arrayNameKvp);",
+                  "        ___arrayNameOrig[_j] = FbKvpType.Pack(builder, ___arrayNameKvp, context);",
                   "      }",
                   };
                   // Emit the code
@@ -1742,7 +1751,7 @@ class CSharpGenerator : public BaseGenerator {
                       ".ToArray();\n" + ind;
             }
             code += "      _" + field.name + " = Create" + camel_name +
-                    "Vector(builder, " + array_name + ");\n" + ind;
+                    "Vector(builder, context, " + array_name + ");\n" + ind;
             code += "    }\n" + ind;
           } else {
             auto pack_method =
@@ -1750,7 +1759,7 @@ class CSharpGenerator : public BaseGenerator {
                     ? "builder.Add" + GenMethod(field.value.type.VectorType()) +
                           "(_o." + apiObjName + "[_j]);"
                     : GenTypeGet(field.value.type) + ".Pack(builder, _o." +
-                          apiObjName + "[_j]);";
+                          apiObjName + "[_j], context);";
             code += "    var _" + field.name + " = default(VectorOffset);\n" + ind;
             code += "    if (_o." + apiObjName + " != null) {\n" + ind;
             code += "      Start" + camel_name + "Vector(builder, _o." +
@@ -1784,7 +1793,7 @@ class CSharpGenerator : public BaseGenerator {
           code +=
               "    var _" + field.name + " = _o." + apiObjName +
               " == null ? 0 : " + GenTypeGet_ObjectAPI(field.value.type, opts) +
-              ".Pack(builder, _o." + apiObjName + ");\n" + ind;
+              ".Pack(builder, _o." + apiObjName + ", context);\n" + ind;
           break;
         }
         default: break;
@@ -1793,7 +1802,7 @@ class CSharpGenerator : public BaseGenerator {
     if (struct_has_create) {
       // Create
       code += "    return Create" + struct_def.name + "(\n" + ind;
-      code += "      builder";
+      code += "      builder, context";
       for (auto it = struct_def.fields.vec.begin();
            it != struct_def.fields.vec.end(); ++it) {
         auto &field = **it;
@@ -1813,7 +1822,7 @@ class CSharpGenerator : public BaseGenerator {
                   code += "      " + WrapInPackFn("_o." + apiObjName, field.attributes);
                 else
                   code += "      " + GenTypeGet(field.value.type) +
-                          ".Pack(builder, _o." + camel_name + ")";
+                          ".Pack(builder, _o." + camel_name + ", context)";
               } else {
                 code += "      _" + field.name;
               }
@@ -1859,7 +1868,7 @@ class CSharpGenerator : public BaseGenerator {
             if (field.value.type.struct_def->fixed) {
               code += "    Add" + camel_name + "(builder, " +
                       GenTypeGet(field.value.type) + ".Pack(builder, " + WrapInPackFn("_o." + apiObjName, field.attributes)
-                      + "));\n" + ind;
+                      + ", context));\n" + ind;
             } else {
               code +=
                   "    Add" + camel_name + "(builder, _" + field.name + ");\n" + ind;
@@ -1890,6 +1899,12 @@ class CSharpGenerator : public BaseGenerator {
       }
       code += "    return End" + struct_def.name + "(builder);\n" + ind;
     }
+    if (isPushAsContext) {
+      code += "  } finally {\n" + ind;
+      code += "    context?.Pop(_o);\n" + ind;
+      ind.erase(ind.size() - 2);
+      code += "  }\n" + ind;
+    }
     code += "  }\n" + ind;
   }
 
@@ -1913,6 +1928,9 @@ class CSharpGenerator : public BaseGenerator {
     if (fieldAttributes.Lookup(packFnAttributeName)) {
       std::string packFnName = fieldAttributes.Lookup(packFnAttributeName)->constant;
       return packFnName + "(" + expr + ")";
+    } else if ((packFnAttributeName == "objapi_convert_to_fbtype") && fieldAttributes.Lookup("objapi_convert_to_fbtype_with_context")) {
+      std::string packFnName = fieldAttributes.Lookup("objapi_convert_to_fbtype_with_context")->constant;
+      return packFnName + "(" + expr + ", context)";
     }
     return expr;
   }
@@ -2203,10 +2221,10 @@ class CSharpGenerator : public BaseGenerator {
       code += "    return " + struct_def.GetNameQualifiedByOuterClass() + ".GetRootAs" + struct_def.name +
               "(new ByteBuffer(fbBuffer)).UnPack();\n";
       code += "  }\n";
-      code += "  public byte[] SerializeToBinary() {\n";
+      code += "  public byte[] SerializeToBinary(ShinyShoe.Ares.IFlatBufferContext context = null) {\n";
       code += "    var fbb = new FlatBufferBuilder(0x10000);\n";
       code += "    " + struct_def.name + ".Finish" + struct_def.name +
-              "Buffer(fbb, " + struct_def.GetNameQualifiedByOuterClass() + ".Pack(fbb, this));\n";
+              "Buffer(fbb, " + struct_def.GetNameQualifiedByOuterClass() + ".Pack(fbb, this, context));\n";
       code += "    return fbb.DataBuffer.ToSizedArray();\n";
       code += "  }\n";
     }
